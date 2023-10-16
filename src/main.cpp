@@ -28,7 +28,7 @@ float currentDutyCycle = 0; // Duty cycle, decimal, 0-1
 
 unsigned long currentCycleEnd = 0;
 unsigned long nextTurnOffTime = 0;
-bool noDmx = false;
+bool noDmx = true;
 bool needToTurnOff = false;
 bool upButtonPressed = false;
 bool downButtonPressed = false;
@@ -44,10 +44,18 @@ SendOnlySoftwareSerial mySerial(SERIAL);
 void pwm();
 
 void readDmx();
+void resetDmxUpdated();
 
 void updateChannels() {
     dmxFrequencyChannel = dmxStartChannel;
     dmxDutyCycleChannel = dmxStartChannel + 1;
+    mySerial.print("start Channel: ");
+    mySerial.println(dmxStartChannel);
+    mySerial.print("Frequency Channel: ");
+    mySerial.println(dmxFrequencyChannel);
+    mySerial.print("Duty Cycle Channel: ");
+    mySerial.println(dmxDutyCycleChannel);
+    resetDmxUpdated();
 }
 
 void isrUp() {
@@ -71,7 +79,6 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(DOWN_BUTTON), isrDown, CHANGE);
     pinMode(TRIGGER, OUTPUT);
     EEPROM.get(0, dmxStartChannel);
-    delay(2000);
     display.showNumberDec(dmxStartChannel);
     updateChannels();
 }
@@ -111,6 +118,7 @@ void editSettings() {
     display.showNumberDec(dmxStartChannel);
     while (!digitalRead(SETTINGS_BUTTON)); // Prevent exiting this menu before settings button is released
     delay(100);
+    resetDmxUpdated();
 }
 
 unsigned long lastDmxPacket() {
@@ -153,20 +161,23 @@ bool dmxUpdated() {
 #endif
 }
 
-void resetDmxUpdated() {
-#ifndef SIMULATE_DMX
-    DMXSerial.resetUpdated();
-#endif
-}
-
 void loop() {
-    if (digitalRead(SETTINGS_BUTTON) == LOW) editSettings();
+    if (digitalRead(SETTINGS_BUTTON) == LOW) {
+        digitalWrite(TRIGGER, LOW);
+        editSettings();
+    }
     pwm();
     delay(100);
 }
 
 void pwm() {
     readDmx();
+
+    if(noDmx || currentFrequencySek == 0 || currentDutyCycleDmxValue == 0) {
+        // Stop fogging if we do and stop loop execution
+        digitalWrite(TRIGGER, LOW);
+        return;
+    }
 
     unsigned long currentMillis = millis();
     // Check if new cycle needs to be started
@@ -212,12 +223,16 @@ void readDmx() {
         resetDmxUpdated();
     } else {
         unsigned long lastPacket = lastDmxPacket();
-        mySerial.print("DMX not updated since ");
-        mySerial.println(lastPacket);
-        if (lastPacket > 1000 && !noDmx) {
+        if (lastPacket > 5000 && !noDmx) {
             mySerial.println("Setting F");
             setDisplayStatus(SEG_NO_DMX);
             noDmx = true;
         }
     }
+}
+
+void resetDmxUpdated() {
+#ifndef SIMULATE_DMX
+    DMXSerial.resetUpdated();
+#endif
 }
