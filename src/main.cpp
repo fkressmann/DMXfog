@@ -28,7 +28,7 @@ float currentDutyCycle = 0; // Duty cycle, decimal, 0-1
 
 unsigned long currentCycleEnd = 0;
 unsigned long nextTurnOffTime = 0;
-bool noDmx = true;
+bool noDmx = false;
 bool needToTurnOff = false;
 bool upButtonPressed = false;
 bool downButtonPressed = false;
@@ -44,6 +44,7 @@ SendOnlySoftwareSerial mySerial(SERIAL);
 void pwm();
 
 void readDmx();
+
 void resetDmxUpdated();
 
 void updateChannels() {
@@ -167,13 +168,13 @@ void loop() {
         editSettings();
     }
     pwm();
-    delay(100);
+    delay(10);
 }
 
 void pwm() {
     readDmx();
 
-    if(noDmx || currentFrequencySek == 0 || currentDutyCycleDmxValue == 0) {
+    if (noDmx || currentFrequencySek == 0 || currentDutyCycleDmxValue == 0) {
         // Stop fogging if we do and stop loop execution
         digitalWrite(TRIGGER, LOW);
         return;
@@ -183,8 +184,8 @@ void pwm() {
     // Check if new cycle needs to be started
     if (currentMillis > currentCycleEnd) {
         mySerial.println("Strating new cycle, fogging");
-        currentCycleEnd = currentMillis + (currentFrequencySek * 1000);
-        nextTurnOffTime = currentMillis + (currentDutyCycle * currentFrequencySek * 1000);
+        currentCycleEnd = currentMillis + (currentFrequencySek * 1000l);
+        nextTurnOffTime = currentMillis + (currentDutyCycle * currentFrequencySek * 1000l);
         needToTurnOff = true;
         setDisplayStatus(SEG_FOG);
         digitalWrite(TRIGGER, HIGH);
@@ -199,35 +200,38 @@ void pwm() {
 }
 
 void readDmx() {
-    if (dmxUpdated()) {
-        noDmx = false;
-        // Check for frequency changes
-        unsigned int newDmxValueFrequency = readDmxFrequencyChannel();
-        if (newDmxValueFrequency != currentFrequencySek) {
-            mySerial.print("New frequency: ");
-            mySerial.println(newDmxValueFrequency);
-            currentFrequencySek = newDmxValueFrequency;
-            // If interval length changed, reset current running interval and start over
-            currentCycleEnd = 0;
-            nextTurnOffTime = 0;
-        }
+    unsigned long lastPacket = lastDmxPacket();
+    if (lastPacket < 5000) {
+        if (dmxUpdated()) {
+            noDmx = false;
+            // Check for frequency changes
+            unsigned int newDmxValueFrequency = readDmxFrequencyChannel();
+            if (newDmxValueFrequency != currentFrequencySek) {
+                mySerial.print("New frequency: ");
+                mySerial.println(newDmxValueFrequency);
+                currentFrequencySek = newDmxValueFrequency;
+                // If interval length changed, reset current running interval and start over
+                currentCycleEnd = 0;
+                nextTurnOffTime = 0;
+                needToTurnOff = false;
+            }
 
-        // Check for duty cycle changes
-        unsigned int newDmxValueDutyCycle = readDmxDutyCycleChannel();
-        if (newDmxValueDutyCycle != currentDutyCycleDmxValue) {
-            mySerial.print("New duty cycle: ");
-            mySerial.println(newDmxValueDutyCycle);
-            currentDutyCycleDmxValue = newDmxValueDutyCycle;
-            currentDutyCycle = (float) newDmxValueDutyCycle / 255;
+            // Check for duty cycle changes
+            unsigned int newDmxValueDutyCycle = readDmxDutyCycleChannel();
+            if (newDmxValueDutyCycle != currentDutyCycleDmxValue) {
+                mySerial.print("New duty cycle: ");
+                mySerial.println(newDmxValueDutyCycle);
+                currentDutyCycleDmxValue = newDmxValueDutyCycle;
+                currentDutyCycle = (float) newDmxValueDutyCycle / 255;
+            }
+            resetDmxUpdated();
         }
+    } else if (!noDmx){
+        mySerial.println(lastPacket);
+        mySerial.println("Setting F");
+        setDisplayStatus(SEG_NO_DMX);
+        noDmx = true;
         resetDmxUpdated();
-    } else {
-        unsigned long lastPacket = lastDmxPacket();
-        if (lastPacket > 5000 && !noDmx) {
-            mySerial.println("Setting F");
-            setDisplayStatus(SEG_NO_DMX);
-            noDmx = true;
-        }
     }
 }
 
