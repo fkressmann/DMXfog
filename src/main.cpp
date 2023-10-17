@@ -26,8 +26,9 @@ uint8_t currentFrequencySek = 0; // Interval length, seconds, 0-255
 uint8_t currentDutyCycleDmxValue; // Duty cycle as DMX value 0-255
 float currentDutyCycle = 0; // Duty cycle, decimal, 0-1
 
-unsigned long currentCycleEnd = 0;
 unsigned long nextTurnOffTime = 0;
+unsigned long currentCycleEnd = 0;
+
 bool noDmx = false;
 bool needToTurnOff = false;
 bool upButtonPressed = false;
@@ -80,12 +81,15 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(DOWN_BUTTON), isrDown, CHANGE);
     pinMode(TRIGGER, OUTPUT);
     EEPROM.get(0, dmxStartChannel);
-    display.showNumberDec(dmxStartChannel);
     updateChannels();
 }
 
 void setDisplayStatus(const uint8_t segments[]) {
     display.setSegments(segments, 1, 0);
+}
+
+void show3DigitNumber(int number) {
+    display.showNumberDec(number, false, 3, 1);
 }
 
 void editSettings() {
@@ -95,10 +99,11 @@ void editSettings() {
     int currentInput = dmxStartChannel; // init with currently set dmx channel
     float multiplier = 1;
     bool changed = false;
+    show3DigitNumber(currentInput);
     while (digitalRead(SETTINGS_BUTTON)) {
         if (currentInput > 512) currentInput = 1;
         if (currentInput < 1) currentInput = 512;
-        if (changed) display.showNumberDec(currentInput, false, 3, 1);
+        if (changed) show3DigitNumber(currentInput);
         if (upButtonPressed) {
             currentInput += multiplier;
             multiplier += 0.3;
@@ -184,8 +189,8 @@ void pwm() {
     // Check if new cycle needs to be started
     if (currentMillis > currentCycleEnd) {
         mySerial.println("Strating new cycle, fogging");
-        currentCycleEnd = currentMillis + (currentFrequencySek * 1000l);
         nextTurnOffTime = currentMillis + (currentDutyCycle * currentFrequencySek * 1000l);
+        currentCycleEnd = currentMillis + (currentFrequencySek * 1000l);
         needToTurnOff = true;
         setDisplayStatus(SEG_FOG);
         digitalWrite(TRIGGER, HIGH);
@@ -197,6 +202,15 @@ void pwm() {
         digitalWrite(TRIGGER, LOW);
         needToTurnOff = false;
     }
+
+    // Update display countdown
+    int sekLeft;
+    if (needToTurnOff) {
+        sekLeft = (nextTurnOffTime - currentMillis) / 1000;
+    } else {
+        sekLeft = (currentCycleEnd - currentMillis) / 1000;
+    }
+    show3DigitNumber(sekLeft);
 }
 
 void readDmx() {
