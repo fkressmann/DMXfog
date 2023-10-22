@@ -40,6 +40,9 @@ const uint8_t SEG_EDIT_MANUAL_CYCLE_DURATION[] = {SEG_A | SEG_F | SEG_C | SEG_D}
 const uint8_t SEG_EDIT_MANUAL_DUTY_CYCLE[] = {SEG_A | SEG_F | SEG_B | SEG_G | SEG_E}; // 'P'
 const uint8_t SEG_MANUAL_MODE[] = {SEG_A | SEG_G | SEG_E | SEG_C}; // 'M'
 const uint8_t SEG_DMX_MODE[] = {SEG_B | SEG_G | SEG_E | SEG_C | SEG_D}; // 'd'
+const uint8_t SEG_OFF[] = {SEG_A | SEG_F | SEG_B | SEG_E | SEG_C | SEG_D, // O
+                           SEG_A | SEG_E | SEG_F | SEG_G, // F
+                           SEG_A | SEG_E | SEG_F | SEG_G}; // F
 
 TM1637Display display(DISPLAY_CLK, DISPLAY_DIO);
 SendOnlySoftwareSerial mySerial(SERIAL);
@@ -229,6 +232,7 @@ void loop() {
     if (currentFrequencySek == 0 || currentDutyCycle == 0) {
         // Stop fogging if we do and stop loop execution
         digitalWrite(TRIGGER, LOW);
+        display.setSegments(SEG_OFF, 3, 1);
         return;
     }
 
