@@ -29,22 +29,24 @@ float currentDutyCycle = 0; // Duty cycle, decimal, 0-1
 unsigned long nextTurnOffTime = 0;
 unsigned long currentCycleEnd = 0;
 
-bool noDmx = false;
+bool dmxMode = true; // false: manual mode
 bool needToTurnOff = false;
 bool upButtonPressed = false;
 bool downButtonPressed = false;
 
-const uint8_t SEG_EDIT[] = {SEG_A | SEG_D | SEG_E | SEG_F | SEG_G};
-const uint8_t SEG_FOG[] = {SEG_A | SEG_E | SEG_F | SEG_G};
-const uint8_t SEG_NO_DMX[] = {SEG_F | SEG_G | SEG_C};
-const uint8_t SEG_EMPTY[] = {0};
+const uint8_t SEG_FOG[] = {SEG_A | SEG_E | SEG_F | SEG_G}; // 'F'
+const uint8_t SEG_EDIT_CHANNEL[] = {SEG_A | SEG_F | SEG_E | SEG_D}; // 'C'
+const uint8_t SEG_EDIT_MANUAL_CYCLE_DURATION[] = {SEG_A | SEG_F | SEG_C | SEG_D}; // 'S'
+const uint8_t SEG_EDIT_MANUAL_DUTY_CYCLE[] = {SEG_A | SEG_F | SEG_B | SEG_G | SEG_E}; // 'P'
+const uint8_t SEG_MANUAL_MODE[] = {SEG_A | SEG_G | SEG_E | SEG_C}; // 'M'
+const uint8_t SEG_DMX_MODE[] = {SEG_B | SEG_G | SEG_E | SEG_C | SEG_D}; // 'd'
 
 TM1637Display display(DISPLAY_CLK, DISPLAY_DIO);
 SendOnlySoftwareSerial mySerial(SERIAL);
 
 void pwm();
 
-void readDmx();
+bool readDmx();
 
 void resetDmxUpdated();
 
@@ -70,9 +72,11 @@ void isrDown() {
 
 void setup() {
     mySerial.begin(115200);
+    mySerial.println("Starting...");
 #ifndef SIMULATE_DMX
     DMXSerial.init(DMXReceiver, 12);
 #endif
+    display.clear();
     display.setBrightness(0x0f);
     pinMode(SETTINGS_BUTTON, INPUT_PULLUP);
     pinMode(UP_BUTTON, INPUT_PULLUP);
@@ -88,21 +92,25 @@ void setDisplayStatus(const uint8_t segments[]) {
     display.setSegments(segments, 1, 0);
 }
 
+void setDisplayStatusAccordingToMode() {
+    if (dmxMode) {
+        setDisplayStatus(SEG_DMX_MODE);
+    } else {
+        setDisplayStatus(SEG_MANUAL_MODE);
+    }
+}
+
 void show3DigitNumber(int number) {
     display.showNumberDec(number, false, 3, 1);
 }
 
-void editSettings() {
-    delay(100);
-    while (!digitalRead(SETTINGS_BUTTON)); // Prevent exiting this menu before settings button is released
-    setDisplayStatus(SEG_EDIT);
-    int currentInput = dmxStartChannel; // init with currently set dmx channel
+int readInputValue(int currentInput, int minValue, int maxValue) {
     float multiplier = 1;
     bool changed = false;
     show3DigitNumber(currentInput);
     while (digitalRead(SETTINGS_BUTTON)) {
-        if (currentInput > 512) currentInput = 1;
-        if (currentInput < 1) currentInput = 512;
+        if (currentInput > maxValue) currentInput = minValue;
+        if (currentInput < minValue) currentInput = maxValue;
         if (changed) show3DigitNumber(currentInput);
         if (upButtonPressed) {
             currentInput += multiplier;
@@ -118,13 +126,40 @@ void editSettings() {
         }
         delay(75);
     }
-    dmxStartChannel = currentInput;
-    EEPROM.put(0, dmxStartChannel);
-    updateChannels();
-    display.showNumberDec(dmxStartChannel);
-    while (!digitalRead(SETTINGS_BUTTON)); // Prevent exiting this menu before settings button is released
+    return currentInput;
+}
+
+void editSettings() {
+    mySerial.print("Entering Settings for ");
     delay(100);
-    resetDmxUpdated();
+    while (!digitalRead(SETTINGS_BUTTON)); // Prevent exiting this menu before settings button is released
+
+    if (dmxMode) {
+        mySerial.println("DMX mode");
+        setDisplayStatus(SEG_EDIT_CHANNEL);
+        dmxStartChannel = readInputValue(dmxStartChannel, 1, 512);
+        EEPROM.put(0, dmxStartChannel);
+        updateChannels();
+        resetDmxUpdated();
+    } else {
+        mySerial.println("manual mode");
+        setDisplayStatus(SEG_EDIT_MANUAL_CYCLE_DURATION);
+        currentFrequencySek = readInputValue(currentFrequencySek, 0, 240);
+        mySerial.print("currentFrequencySek set to: ");
+        mySerial.println(currentFrequencySek);
+        while (!digitalRead(SETTINGS_BUTTON)); // Prevent exiting this menu before settings button is released
+        setDisplayStatus(SEG_EDIT_MANUAL_DUTY_CYCLE);
+        int cyclePercentage = readInputValue(currentDutyCycle * 100, 0, 100);
+        currentDutyCycle = (float) cyclePercentage / 100;
+        mySerial.print("currentDutyCycle set to: ");
+        mySerial.println(currentDutyCycle);
+    }
+
+    display.clear();
+    setDisplayStatusAccordingToMode();
+    while (!digitalRead(SETTINGS_BUTTON)); // Prevent exiting this menu before settings button is released
+    mySerial.println("leaving settings");
+    delay(100);
 }
 
 unsigned long lastDmxPacket() {
@@ -172,19 +207,36 @@ void loop() {
         digitalWrite(TRIGGER, LOW);
         editSettings();
     }
-    pwm();
-    delay(10);
-}
+    bool dmxIsActive = readDmx();
 
-void pwm() {
-    readDmx();
+    // Switch to manual mode when no DMX was received for some time
+    if (!dmxIsActive && dmxMode) {
+        mySerial.println("Switching to manual mode");
+        dmxMode = false;
+        setDisplayStatusAccordingToMode();
+        digitalWrite(TRIGGER, LOW);
+        resetDmxUpdated();
+    }
 
-    if (noDmx || currentFrequencySek == 0 || currentDutyCycleDmxValue == 0) {
+    // When manual mode is enabled, and we start receiving DMX again, we switch back to DMX mode
+    if (dmxIsActive && !dmxMode) {
+        mySerial.println("Switching to DMX mode");
+        dmxMode = true;
+        setDisplayStatusAccordingToMode();
+    }
+
+    // Turn output off immediately when one value is set to 0
+    if (currentFrequencySek == 0 || currentDutyCycle == 0) {
         // Stop fogging if we do and stop loop execution
         digitalWrite(TRIGGER, LOW);
         return;
     }
 
+    pwm();
+    delay(10);
+}
+
+void pwm() {
     unsigned long currentMillis = millis();
     // Check if new cycle needs to be started
     if (currentMillis > currentCycleEnd) {
@@ -195,10 +247,10 @@ void pwm() {
         setDisplayStatus(SEG_FOG);
         digitalWrite(TRIGGER, HIGH);
     }
-    // Check if trigger needs to be tunred off
+    // Check if trigger needs to be turned off
     if (needToTurnOff && currentMillis > nextTurnOffTime) {
         mySerial.println("Fogging stop");
-        setDisplayStatus(SEG_EMPTY);
+        setDisplayStatusAccordingToMode();
         digitalWrite(TRIGGER, LOW);
         needToTurnOff = false;
     }
@@ -206,22 +258,22 @@ void pwm() {
     // Update display countdown
     int sekLeft;
     if (needToTurnOff) {
-        sekLeft = (nextTurnOffTime - currentMillis) / 1000;
+        sekLeft = (nextTurnOffTime - currentMillis) / 1000 + 1;
     } else {
-        sekLeft = (currentCycleEnd - currentMillis) / 1000;
+        sekLeft = (currentCycleEnd - currentMillis) / 1000 + 1;
     }
     show3DigitNumber(sekLeft);
 }
 
-void readDmx() {
+bool readDmx() {
     unsigned long lastPacket = lastDmxPacket();
     if (lastPacket < 5000) {
         if (dmxUpdated()) {
-            noDmx = false;
+            dmxMode = true;
             // Check for frequency changes
             unsigned int newDmxValueFrequency = readDmxFrequencyChannel();
             if (newDmxValueFrequency != currentFrequencySek) {
-                mySerial.print("New frequency: ");
+                mySerial.print("New DMX frequency: ");
                 mySerial.println(newDmxValueFrequency);
                 currentFrequencySek = newDmxValueFrequency;
                 // If interval length changed, reset current running interval and start over
@@ -233,20 +285,17 @@ void readDmx() {
             // Check for duty cycle changes
             unsigned int newDmxValueDutyCycle = readDmxDutyCycleChannel();
             if (newDmxValueDutyCycle != currentDutyCycleDmxValue) {
-                mySerial.print("New duty cycle: ");
+                mySerial.print("New DMX duty cycle: ");
                 mySerial.println(newDmxValueDutyCycle);
                 currentDutyCycleDmxValue = newDmxValueDutyCycle;
                 currentDutyCycle = (float) newDmxValueDutyCycle / 255;
             }
             resetDmxUpdated();
         }
-    } else if (!noDmx){
-        mySerial.println(lastPacket);
-        mySerial.println("Setting F");
-        setDisplayStatus(SEG_NO_DMX);
-        noDmx = true;
-        resetDmxUpdated();
+    } else {
+        return false;
     }
+    return true;
 }
 
 void resetDmxUpdated() {
