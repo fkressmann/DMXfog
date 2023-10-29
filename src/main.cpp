@@ -49,7 +49,7 @@ SendOnlySoftwareSerial mySerial(SERIAL);
 
 void pwm();
 
-bool readDmx();
+bool readDmx(bool force = false);
 
 void resetDmxUpdated();
 
@@ -62,7 +62,6 @@ void updateChannels() {
     mySerial.println(dmxFrequencyChannel);
     mySerial.print("Duty Cycle Channel: ");
     mySerial.println(dmxDutyCycleChannel);
-    resetDmxUpdated();
 }
 
 void isrUp() {
@@ -143,7 +142,6 @@ void editSettings() {
         dmxStartChannel = readInputValue(dmxStartChannel, 1, 512);
         EEPROM.put(0, dmxStartChannel);
         updateChannels();
-        resetDmxUpdated();
     } else {
         mySerial.println("manual mode");
         setDisplayStatus(SEG_EDIT_MANUAL_CYCLE_DURATION);
@@ -216,9 +214,9 @@ void loop() {
     if (!dmxIsActive && dmxMode) {
         mySerial.println("Switching to manual mode");
         dmxMode = false;
+        currentDutyCycle = 0;
         setDisplayStatusAccordingToMode();
         digitalWrite(TRIGGER, LOW);
-        resetDmxUpdated();
     }
 
     // When manual mode is enabled, and we start receiving DMX again, we switch back to DMX mode
@@ -226,10 +224,11 @@ void loop() {
         mySerial.println("Switching to DMX mode");
         dmxMode = true;
         setDisplayStatusAccordingToMode();
+        readDmx(true);
     }
 
     // Turn output off immediately when one value is set to 0
-    if (currentFrequencySek == 0 || currentDutyCycle == 0) {
+    if (currentDutyCycle == 0) {
         // Stop fogging if we do and stop loop execution
         digitalWrite(TRIGGER, LOW);
         display.setSegments(SEG_OFF, 3, 1);
@@ -269,11 +268,10 @@ void pwm() {
     show3DigitNumber(sekLeft);
 }
 
-bool readDmx() {
+bool readDmx(bool force) {
     unsigned long lastPacket = lastDmxPacket();
     if (lastPacket < 5000) {
-        if (dmxUpdated()) {
-            dmxMode = true;
+        if (dmxUpdated() || force) {
             // Check for frequency changes
             unsigned int newDmxValueFrequency = readDmxFrequencyChannel();
             if (newDmxValueFrequency != currentFrequencySek) {
@@ -288,7 +286,7 @@ bool readDmx() {
 
             // Check for duty cycle changes
             unsigned int newDmxValueDutyCycle = readDmxDutyCycleChannel();
-            if (newDmxValueDutyCycle != currentDutyCycleDmxValue) {
+            if ((newDmxValueDutyCycle != currentDutyCycleDmxValue) || force) {
                 mySerial.print("New DMX duty cycle: ");
                 mySerial.println(newDmxValueDutyCycle);
                 currentDutyCycleDmxValue = newDmxValueDutyCycle;
@@ -296,10 +294,10 @@ bool readDmx() {
             }
             resetDmxUpdated();
         }
+        return true;
     } else {
         return false;
     }
-    return true;
 }
 
 void resetDmxUpdated() {
